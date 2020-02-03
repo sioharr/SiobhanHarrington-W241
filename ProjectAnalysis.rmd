@@ -1,0 +1,1436 @@
+---
+title: 'W241 Project - MASA'
+author: Adam, Alla, Grant, and Siobhan
+output:
+  pdf_document: default
+  html_document: default
+urlcolor: blue
+---
+
+```{r}
+# load packages 
+library(foreign)
+library(data.table)
+library(foreign)
+library(dplyr)
+library(tidyr)
+library(data.table)
+library(magrittr) 
+library(lmtest)
+library(sandwich)
+library(stargazer)
+library(multiwayvcov)
+library(ggplot2)
+#library(hmisc)
+
+#install.packages('Hmisc')
+```
+
+First we read in the data.  The two csv files represent respondents from the groups social media and Fulcrum respondents respectively.
+
+```{r}
+d1 <- read.csv("./Data/Enrollment-With Learnings.csv", header = T)
+d2 <- read.csv("./Data/Enrollment-With Learnings-for Fulcrum.csv", header = T)
+#immediately remove email addresses
+d1$Q26 <-NULL
+d1 <- d1[-c(1,2) ,]
+d2 <- d2[-c(1,2) ,]
+
+#Add Source Column to tell if data came from Fulcrum or other source
+d1$Fulcrum = 0
+d2$Fulcrum = 1
+
+alldata <- rbind(d2, d1)
+head(alldata,3)
+```
+
+```{r}
+get.confidence <- function(estimate,error) {
+  lower_bound = estimate - 1.96*error
+  upper_bound = estimate + 1.96*error
+  interval = c(lower_bound, upper_bound)
+  return(interval)
+}
+```
+
+Next, we remove some personally identifying information, and other info we wont use as part of the anlysis.  
+
+```{r}
+#Remove Stuff
+drop <- c("RecipientFirstName","RecipientLastName","RecipientEmail","ExternalReference","rid","zip")
+```
+
+Next we split the date into columns for month data and year.  This will be used to remove responses from initial testing
+
+```{r}
+#Remove Test Records NEEDS UPDATING AS WE HAVE MORE DATES AVAILABLE NOW
+alldata = separate(alldata,StartDate,c("StartDate","StartTime"), sep=" " ,remove = TRUE)
+alldata = separate(alldata,StartDate,c("StartMonth","StartDay","StartYear"), sep="/" ,remove = TRUE)
+```
+
+Next we remove responses from initial testing, as well as non US citizens or residents
+
+```{r}
+alldata = alldata[as.numeric(alldata$StartDay) >= 13,]
+
+#Remove Folks living Outside the USA and not American Citizens (This population was not the focus on our study and did not get treated)
+alldata = alldata[alldata$Q34!="No",]
+```
+
+Splitting by assignment group for organization and easier use down the road
+
+```{r}
+controlgroupINIT = alldata[alldata$Group=='Control',]
+placebogroupINIT = alldata[alldata$Group=='Placebo',]
+treatmentgroupINIT = alldata[alldata$Group=='Treatment',]
+```
+
+This next chunk of code analyzes attrition overall and differentially
+
+```{r}
+#Total who did not complete study, including those who were not assigned to any group
+print(as.numeric(count(alldata[alldata$Progress!="100",])))
+#This includes subjects who do not meet the requirements of the study (US Resident or Citizen)
+
+attritionc = controlgroupINIT[controlgroupINIT$Progress!="100",]
+attritionp = placebogroupINIT[placebogroupINIT$Progress!="100",]
+attritiont = treatmentgroupINIT[treatmentgroupINIT$Progress!="100",]
+
+#Split by assignment group
+attritc=as.numeric(count(attritionc))
+attritp=as.numeric(count(attritionp))
+attritt=as.numeric(count(attritiont))
+attrit = attritc+attritp+attritt
+```
+
+```{r}
+#Split By Assignment group and Affiliation
+#Control
+acr=nrow(attritionc[attritionc$Q5=='Republican',])
+acd=nrow(attritionc[attritionc$Q5=='Democrat',])
+aci=nrow(attritionc[attritionc$Q5=='Independent',]) + nrow(attritionc[attritionc$Q5=='Other',])
+
+#Placebo
+apr=nrow(attritionp[attritionp$Q5=='Republican',])
+apd=nrow(attritionp[attritionp$Q5=='Democrat',])
+api=nrow(attritionp[attritionp$Q5=='Independent',]) + nrow(attritionp[attritionp$Q5=='Other',])
+
+#Treatment
+atr=nrow(attritiont[attritiont$Q5=='Republican',])
+atd=nrow(attritiont[attritiont$Q5=='Democrat',])
+ati=nrow(attritiont[attritiont$Q5=='Independent',]) + nrow(attritiont[attritiont$Q5=='Other',])
+
+```
+
+This data is used to generate Table 2.2 from the paper.
+
+```{r}
+totalc=as.numeric(count(controlgroupINIT))
+totalp=as.numeric(count(placebogroupINIT))
+totalt=as.numeric(count(treatmentgroupINIT))
+totalall=totalc+totalp+totalt
+
+
+#Rates of attrition
+#Overall
+print(attrit/totalall)
+#By Treatment group
+print(attritc/totalc)
+print(attritp/totalp)
+print(attritt/totalt)
+
+
+```
+
+
+Chi Square Attrition Test
+```{r}
+
+attrition_tbl <- matrix(c(acr, acd, aci, apr, apd, api, atr, atd,ati), ncol=3, byrow=TRUE)
+colnames(attrition_tbl) <- c('Republican', 'Democrat', 'Independent')
+rownames(attrition_tbl) <- c('Contro', 'Placebo', 'Treatment')
+
+
+#The null hypothesis of the independence assumption is to be rejected if the p-value of the following Chi-squared test statistics is less than a #given significance level alpha
+chisq.test(attrition_tbl)
+
+```
+
+
+
+
+
+```{r}
+compc = controlgroupINIT[controlgroupINIT$Progress=="100",]
+compp = placebogroupINIT[placebogroupINIT$Progress=="100",]
+compt = treatmentgroupINIT[treatmentgroupINIT$Progress=="100",]
+
+#Split By Affiliation
+#Control
+
+
+ccr=print(nrow(compc[compc$Q5=='Republican',]))
+ccd=print(nrow(compc[compc$Q5=='Democrat',]))
+cci=print(nrow(compc[compc$Q5=='Independent',]) + nrow(compc[compc$Q5=='Other',]))
+
+#Placebo
+cpr=print(nrow(compp[compp$Q5=='Republican',]))
+cpd=print(nrow(compp[compp$Q5=='Democrat',]))
+cpi=print(nrow(compp[compp$Q5=='Independent',]) + nrow(compp[compp$Q5=='Other',]))
+
+#Treatment
+ctr=print(nrow(compt[compt$Q5=='Republican',]))
+ctd=print(nrow(compt[compt$Q5=='Democrat',]))
+cti=print(nrow(compt[compt$Q5=='Independent',]) + nrow(compt[compt$Q5=='Other',]))
+
+
+comp_tbl <- matrix(c(ccr, ccd, cci, cpr, cpd, cpi, ctr, ctd,cti), ncol=3, byrow=TRUE)
+colnames(comp_tbl) <- c('Republican', 'Democrat', 'Independent')
+rownames(comp_tbl) <- c('Contro', 'Placebo', 'Treatment')
+
+
+
+chisq.test(comp_tbl)
+
+```
+
+
+
+Figure 2.7 - Attrition plot
+```{r}
+attrition_gg = alldata[alldata$Progress!="100" & alldata$Group !="",]
+party.lkp.df<-data.frame(response=c("Democrat","Republican", "Independent","Other"), 
+                         response.no=c('Democrat','Republican',   'Other',  'Other'  ))
+
+attrition_gg$partyplot <- party.lkp.df$response.no[match(attrition_gg$Q5, party.lkp.df$response)]
+attrition_gg$partyplot <- factor(attrition_gg$partyplot, c( 'Democrat','Republican','Other'))
+
+att_plot<-ggplot(data=attrition_gg, aes(x=Group, fill=factor(partyplot))) +
+    geom_bar( position=position_stack()) + labs(x="Attrition by Treatment Group and Party") + guides(fill=guide_legend(title=NULL))+ theme( axis.text.x = element_text(colour="grey20",size=10,angle=25,hjust=.5,vjust=.5,face="plain"))  
+
+att_plot
+```
+
+```{r}
+#Remove Incomplete Surveys
+alldata = alldata[alldata$Progress=="100",]
+head(alldata,3)
+```
+
+
+
+
+```{r}
+#Build Lookup Table for Question Translation
+lkp.df<-data.frame(response=c('Never','Almost Never', 'Sometimes','Fairly Often', 'Very Often'),response.no=c(0,1,2,3,4))
+
+#Create Numeric PSS Answers
+alldata$PSS1 <- match(alldata$Q36, lkp.df$response)
+alldata$PSS2 <- match(alldata$Q38, lkp.df$response)
+alldata$PSS3 <- match(alldata$Q40, lkp.df$response)
+alldata$PSS4 <- match(alldata$Q41, lkp.df$response)
+alldata$PSS5 <- match(alldata$Q42, lkp.df$response)
+alldata$PSS6 <- match(alldata$Q44, lkp.df$response)
+alldata$PSS7 <- match(alldata$Q45, lkp.df$response)
+alldata$PSS8 <- match(alldata$Q46, lkp.df$response)
+alldata$PSS9 <- match(alldata$Q47, lkp.df$response)
+alldata$PSS10 <- match(alldata$Q48, lkp.df$response)
+alldata$PSS11 <- match(alldata$Q52, lkp.df$response)
+alldata$PSS12 <- match(alldata$Q53, lkp.df$response)
+alldata$PSS13 <- match(alldata$Q54, lkp.df$response)
+alldata$PSS14 <- match(alldata$Q55, lkp.df$response)
+
+#Reverse 4,5,6,7,9,10,13 based on PSS documentation
+alldata$PSS4 <- 4-as.numeric(alldata$PSS4)
+alldata$PSS5 <- 4-as.numeric(alldata$PSS5)
+alldata$PSS6 <- 4-as.numeric(alldata$PSS6)
+alldata$PSS7 <- 4-as.numeric(alldata$PSS7)
+alldata$PSS9 <- 4-as.numeric(alldata$PSS9)
+alldata$PSS10 <- 4-as.numeric(alldata$PSS10)
+alldata$PSS13 <- 4-as.numeric(alldata$PSS13)
+
+alldata$PSSScore <-alldata$PSS1+alldata$PSS2+alldata$PSS3+alldata$PSS4+alldata$PSS5+alldata$PSS6+alldata$PSS7+alldata$PSS8+alldata$PSS9+alldata$PSS10+alldata$PSS11+alldata$PSS12+alldata$PSS13+alldata$PSS14
+
+alldata$PSSScore <- as.numeric(alldata$PSSScore)
+
+```
+
+
+```{r}
+e <- summarize(alldata %>% group_by( alldata$Group), count=n(), ate=mean(PSSScore, na.rm=TRUE))
+e
+```
+
+Refreshing dataframes for each control group for later ease
+
+```{r}
+controlgroup = alldata[alldata$Group=='Control',]
+placebogroup = alldata[alldata$Group=='Placebo',]
+treatmentgroup = alldata[alldata$Group=='Treatment',]
+```
+
+Looking at some simple breakdowns for party affiliation
+
+```{r}
+democrat = alldata[alldata$Q5=="Democrat",]
+e <- summarize(democrat %>% group_by( democrat$Group), count=n(), ate=mean(PSSScore, na.rm=TRUE))
+e
+```
+
+
+```{r}
+republican = alldata[alldata$Q5=="Republican",]
+e <- summarize(republican %>% group_by( republican$Group), count=n(), ate=mean(PSSScore, na.rm=TRUE))
+
+e
+```
+```{r}
+independent = alldata[alldata$Q5=="Independent",]
+e <- summarize(independent %>% group_by( independent$Group), count=n(), ate=mean(PSSScore, na.rm=TRUE))
+
+e
+```
+
+```{r}
+other = alldata[alldata$Q5=="Other",]
+e <- summarize(other %>% group_by( other$Group), count=n(), ate=mean(PSSScore, na.rm=TRUE))
+
+e
+```
+
+Function to find robust standard errors
+
+```{r}
+
+r.se <- function(model) { 
+  require(sandwich, quietly = TRUE) 
+  vcov <- vcovHC(x = model, type ="HC3")
+  se <- sqrt(diag(vcov))
+  return(se)
+}
+
+```
+
+
+Power Calculations
+First we will look at control vs placebo
+```{r}
+ATE_P = print(mean(as.numeric(placebogroup$PSSScore), na.rm=TRUE) - mean(as.numeric(controlgroup$PSSScore), na.rm=TRUE))
+combinedP = rbind(placebogroup, controlgroup)
+Sigma_P = print(sd(as.numeric(combinedP$PSSScore), na.rm=TRUE))
+ncountP = print(nrow(combinedP))
+alpha = .05
+powerval = pt(abs(ATE_P)*sqrt(ncountP)/(2*Sigma_P)-qt(1-alpha/2, df = ncountP),df = ncountP)
+print(powerval)
+
+PAS <- lm(PSSScore~Group, data=combinedP)
+#PASE = summary(PAS)$coeff[2,2]
+PAS$r.se <-r.se(model = PAS)
+PASE = data.frame(PAS$r.se)[2,1]
+placebogroup.se=PASE
+
+placebo.ate =ATE_P
+
+
+```
+Same idea by political affiliation.  We do not discuss this in the paper, but we calculated power for each individual experiment by affiliation as a curiousity in case we do future work in this area.
+
+```{r}
+republicantreatment = republican[republican$Group=="Treatment",]
+republicancontrol = republican[republican$Group=="Control",] 
+republicanplacebo = republican[republican$Group=="Placebo",] 
+democrattreatment = democrat[democrat$Group=="Treatment",]
+democratcontrol = democrat[democrat$Group=="Control",] 
+democratplacebo = democrat[democrat$Group=="Placebo",]
+independenttreatment = independent[independent$Group=="Treatment",]
+independentcontrol = independent[independent$Group=="Control",] 
+independentplacebo = independent[independent$Group=="Placebo",]
+othertreatment = other[other$Group=="Treatment",]
+othercontrol = other[other$Group=="Control",] 
+otherplacebo = other[other$Group=="Placebo",]
+
+```
+
+```{r}
+ATE_RP = mean(as.numeric(republicanplacebo$PSSScore), na.rm=TRUE) - mean(as.numeric(republicancontrol$PSSScore), na.rm=TRUE)
+combinedRP = rbind(republicanplacebo, republicancontrol)
+Sigma_RP = sd(as.numeric(combinedRP$PSSScore), na.rm=TRUE)
+ncountRP = nrow(combinedRP)
+alpha = .05
+powervalRP = pt(abs(ATE_RP)*sqrt(ncountRP)/(2*Sigma_RP)-qt(1-alpha/2, df = ncountRP),df = ncountRP)
+print(powervalRP)
+
+PRS <- lm(PSSScore~Group, data=combinedRP)
+#PRSE = summary(PRS)$coeff[2,2]
+
+PRS$r.se <-r.se(model = PRS)
+PRSE = data.frame(PRS$r.se)[2,1]
+
+```
+
+```{r}
+ATE_DP = mean(as.numeric(democratplacebo$PSSScore), na.rm=TRUE) - mean(as.numeric(democratcontrol$PSSScore), na.rm=TRUE)
+combinedDP = rbind(democratplacebo, democratcontrol)
+Sigma_DP = sd(as.numeric(combinedDP$PSSScore), na.rm=TRUE)
+ncountDP = nrow(combinedDP)
+alpha = .05
+powerval = pt(abs(ATE_DP)*sqrt(ncountDP)/(2*Sigma_DP)-qt(1-alpha/2, df = ncountDP),df = ncountDP)
+print(powerval)
+
+PDS <- lm(PSSScore~Group, data=combinedDP)
+#PDSE = summary(PDS)$coeff[2,2]
+
+PDS$r.se <-r.se(model = PDS)
+PDSE = data.frame(PDS$r.se)[2,1]
+
+```
+
+```{r}
+ATE_IP = mean(as.numeric(independentplacebo$PSSScore), na.rm=TRUE) - mean(as.numeric(independentcontrol$PSSScore), na.rm=TRUE)
+combinedIP = rbind(independentplacebo, independentcontrol)
+Sigma_IP = sd(as.numeric(combinedIP$PSSScore), na.rm=TRUE)
+ncountIP = nrow(combinedIP)
+alpha = .05
+powervalIP = pt(abs(ATE_IP)*sqrt(ncountIP)/(2*Sigma_IP)-qt(1-alpha/2, df = ncountIP),df = ncountIP)
+print(powervalIP)
+
+PIS <- lm(PSSScore~Group, data=combinedIP)
+#PISE = summary(PIS)$coeff[2,2]
+
+PIS$r.se <-r.se(model = PIS)
+PISE = data.frame(PIS$r.se)[2,1]
+
+```
+
+```{r}
+ATE_OP = mean(as.numeric(otherplacebo$PSSScore), na.rm=TRUE) - mean(as.numeric(othercontrol$PSSScore), na.rm=TRUE)
+combinedOP = rbind(otherplacebo, othercontrol)
+Sigma_OP = sd(as.numeric(combinedOP$PSSScore), na.rm=TRUE)
+ncountOP = nrow(combinedOP)
+alpha = .05
+powervalOP = pt(abs(ATE_OP)*sqrt(ncountOP)/(2*Sigma_OP)-qt(1-alpha/2, df = ncountOP),df = ncountOP)
+print(powervalOP)
+
+POS <- lm(PSSScore~Group, data=combinedOP)
+#POSE = summary(POS)$coeff[2,2]
+
+POS$r.se <-r.se(model = POS)
+POSE = data.frame(POS$r.se)[2,1]
+```
+
+Next we will look at treatment in comparison to placebo based on the same groupings as above
+
+```{r}
+ATE_T = print(mean(as.numeric(treatmentgroup$PSSScore), na.rm=TRUE) - mean(as.numeric(placebogroup$PSSScore), na.rm=TRUE))
+combinedT = rbind(treatmentgroup, placebogroup)
+Sigma_T = print(sd(as.numeric(combinedT$PSSScore), na.rm=TRUE))
+ncountT = print(nrow(combinedT))
+alpha = .05
+powervalT = pt(abs(ATE_T)*sqrt(ncountT)/(2*Sigma_T)-qt(1-alpha/2, df = ncountT),df = ncountT)
+print(powervalT)
+
+TAS <- lm(PSSScore~Group, data=combinedT)
+#TASE = summary(TAS)$coeff[2,2]
+
+TAS$r.se <-r.se(model = TAS)
+TASE = data.frame(TAS$r.se)[2,1]
+treatmentgroup.se = TASE
+treatment.ate=ATE_T
+print(treatment.ate)
+
+```
+
+```{r}
+ATE_RT = mean(as.numeric(republicantreatment$PSSScore), na.rm=TRUE) - mean(as.numeric(republicanplacebo$PSSScore), na.rm=TRUE)
+combinedRT = rbind(republicantreatment, republicanplacebo)
+Sigma_RT = sd(as.numeric(combinedRT$PSSScore), na.rm=TRUE)
+ncountRT = nrow(combinedRT)
+alpha = .05
+powervalRT = pt(abs(ATE_RT)*sqrt(ncountRT)/(2*Sigma_RT)-qt(1-alpha/2, df = ncountRT),df = ncountRT)
+print(powervalRT)
+
+TRS <- lm(PSSScore~Group, data=combinedRT)
+#TRSE = summary(TRS)$coeff[2,2]
+
+TRS$r.se <-r.se(model = TRS)
+TRSE = data.frame(TRS$r.se)[2,1]
+
+```
+
+```{r}
+ATE_DT = mean(as.numeric(democrattreatment$PSSScore), na.rm=TRUE) - mean(as.numeric(democratplacebo$PSSScore), na.rm=TRUE)
+combinedDT = rbind(democrattreatment, democratplacebo)
+Sigma_DT = sd(as.numeric(combinedDT$PSSScore), na.rm=TRUE)
+ncountDT = nrow(combinedDT)
+alpha = .05
+powervalDT = pt(abs(ATE_DT)*sqrt(ncountDT)/(2*Sigma_DT)-qt(1-alpha/2, df = ncountDT),df = ncountDT)
+print(powervalDT)
+
+TDS <- lm(PSSScore~Group, data=combinedDT)
+#TDSE = summary(TDS)$coeff[2,2]
+
+TDS$r.se <-r.se(model = TDS)
+TDSE = data.frame(TDS$r.se)[2,1]
+
+```
+
+
+
+```{r}
+ATE_IT = mean(as.numeric(independenttreatment$PSSScore), na.rm=TRUE) - mean(as.numeric(independentplacebo$PSSScore), na.rm=TRUE)
+combinedIT = rbind(independenttreatment, independentplacebo)
+Sigma_IT = sd(as.numeric(combinedIT$PSSScore), na.rm=TRUE)
+ncountIT = nrow(combinedIT)
+alpha = .05
+powervalIT = pt(abs(ATE_IT)*sqrt(ncountIT)/(2*Sigma_IT)-qt(1-alpha/2, df = ncountIT),df = ncountIT)
+print(powervalIT)
+
+TIS <- lm(PSSScore~Group, data=combinedIT)
+#TISE = summary(TIS)$coeff[2,2]
+
+
+TIS$r.se <-r.se(model = TIS)
+TISE = data.frame(TIS$r.se)[2,1]
+
+```
+
+```{r}
+ATE_OT = mean(as.numeric(othertreatment$PSSScore), na.rm=TRUE) - mean(as.numeric(otherplacebo$PSSScore), na.rm=TRUE)
+combinedOT = rbind(othertreatment, otherplacebo)
+Sigma_OT = sd(as.numeric(combinedOT$PSSScore), na.rm=TRUE)
+ncountOT = nrow(combinedOT)
+alpha = .05
+powervalOT = pt(abs(ATE_OT)*sqrt(ncountOT)/(2*Sigma_OT)-qt(1-alpha/2, df = ncountOT),df = ncountOT)
+print(powervalOT)
+
+TOS <- lm(PSSScore~Group, data=combinedOT)
+#TOSE = summary(TOS)$coeff[2,2]
+
+
+TOS$r.se <-r.se(model = TOS)
+TOSE = data.frame(TOS$r.se)[2,1]
+
+```
+
+
+A dataframe collection of the above ATEs.  This data makes up table 3.1
+
+```{r}
+ATE_Data<- data.frame("Party Affiliation" = c("All", "Democrat", "Republican", "Independent","Other"), "ATE Placebo/Control" = c(ATE_P,ATE_DP,ATE_RP,ATE_IP,ATE_OP), "Standard_Error_P/C" = c(PASE,PDSE,PRSE,PISE,POSE) , "ATE Treatment/Placebo" = c(ATE_T,ATE_DT,ATE_RT,ATE_IT,ATE_OT), "Standard_Error_T/P" = c(TASE,TDSE,TRSE,TISE,TOSE) )
+
+print(ATE_Data)
+
+```
+
+In stargazer form for nicer looking tables
+
+```{r,results='asis'}
+stargazer(ATE_Data,type="latex",
+          summary=FALSE
+)
+
+```
+
+Next we will look at treatment in comparison to control (as a curiousity)
+```{r}
+ATE_P = mean(as.numeric(treatmentgroup$PSSScore), na.rm=TRUE) - mean(as.numeric(controlgroup$PSSScore), na.rm=TRUE)
+combined = rbind(treatmentgroup, controlgroup)
+Sigma_P = sd(as.numeric(combined$PSSScore), na.rm=TRUE)
+ncount = nrow(combined)
+alpha = .05
+powerval = pt(abs(ATE_P)*sqrt(ncount)/(2*Sigma_P)-qt(1-alpha/2, df = ncount),df = ncount)
+print(powerval)
+```
+
+```{r}
+ATE_P = mean(as.numeric(republicantreatment$PSSScore), na.rm=TRUE) - mean(as.numeric(republicancontrol$PSSScore), na.rm=TRUE)
+combined = rbind(republicantreatment, republicancontrol)
+Sigma_P = sd(as.numeric(combined$PSSScore), na.rm=TRUE)
+ncount = nrow(combined)
+alpha = .05
+powerval = pt(abs(ATE_P)*sqrt(ncount)/(2*Sigma_P)-qt(1-alpha/2, df = ncount),df = ncount)
+print(powerval)
+
+```
+
+```{r}
+ATE_P = mean(as.numeric(democrattreatment$PSSScore), na.rm=TRUE) - mean(as.numeric(democratcontrol$PSSScore), na.rm=TRUE)
+combined = rbind(democrattreatment, democratcontrol)
+Sigma_P = sd(as.numeric(combined$PSSScore), na.rm=TRUE)
+ncount = nrow(combined)
+alpha = .05
+powerval = pt(abs(ATE_P)*sqrt(ncount)/(2*Sigma_P)-qt(1-alpha/2, df = ncount),df = ncount)
+print(powerval)
+```
+
+```{r}
+ATE_P = mean(as.numeric(independenttreatment$PSSScore), na.rm=TRUE) - mean(as.numeric(independentcontrol$PSSScore), na.rm=TRUE)
+combined = rbind(independenttreatment, independentcontrol)
+Sigma_P = sd(as.numeric(combined$PSSScore), na.rm=TRUE)
+ncount = nrow(combined)
+alpha = .05
+powerval = pt(abs(ATE_P)*sqrt(ncount)/(2*Sigma_P)-qt(1-alpha/2, df = ncount),df = ncount)
+print(powerval)
+```
+
+Reintroduce Placebo/Treatment and Control/Placebo Data
+```{r}
+combinedPT = rbind(treatmentgroup, placebogroup)
+combinedCP = rbind(controlgroup, placebogroup)
+
+#And by political affiliation
+republicanPT = combinedPT[combinedPT$Q5=="Republican",]
+democratPT = combinedPT[combinedPT$Q5=="Democrat",]
+independentPT = combinedPT[combinedPT$Q5=="Independent",]
+
+republicanCP = combinedCP[combinedPT$Q5=="Republican",]
+democratCP = combinedCP[combinedPT$Q5=="Democrat",]
+independentCP = combinedCP[combinedPT$Q5=="Independent",]
+```
+
+The next sections look at various models for PSSscore vs assignment, affiliation and various other covariates.  A summary table is generated in stargazer for those chosen to be included in the paper.
+
+```{r}
+m1 <- lm(PSSScore~Group, data = combinedPT)
+
+m1$vcovHC <- vcovHC(m1)
+
+regsum = coeftest(m1)
+
+print(regsum)
+
+```
+
+Broken Down by Political Affiliation
+
+```{r}
+#combinedPT$PSSScore
+
+m2 <- lm(PSSScore~Group+Q5+Q5*Group, data = combinedPT)
+
+m2$vcovHC <- vcovHC(m2)
+
+regsum = coeftest(m2)
+
+print(regsum)
+
+```
+
+
+Republican
+```{r}
+m3 <- lm(PSSScore~Group, data = republicanPT)
+
+summary(m3)
+
+m3$vcovHC <- vcovHC(m3)
+
+regsum = coeftest(m3)
+
+print(regsum)
+
+```
+
+
+Democrat
+```{r}
+
+m4 <- lm(PSSScore~Group, data = democratPT)
+
+summary(m4)
+
+m4$vcovHC <- vcovHC(m4)
+
+regsum = coeftest(m4)
+
+print(regsum)
+
+```
+
+Independent
+```{r}
+
+m5 <- lm(PSSScore~Group, data = independentPT)
+
+summary(m5)
+
+m5$vcovHC <- vcovHC(m5)
+
+regsum = coeftest(m5)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+
+```
+
+Looking at some other pre-treatment effects
+
+Gender
+
+```{r}
+
+m6 <- lm(PSSScore~Group+Q3, data = combinedPT)
+
+summary(m6)
+
+m6$vcovHC <- vcovHC(m6)
+
+regsum = coeftest(m6)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+```
+
+Ethnicity
+
+```{r}
+
+m7 <- lm(PSSScore~Group+ethnicity, data = combinedPT)
+
+summary(m7)
+
+m7$vcovHC <- vcovHC(m7)
+
+regsum = coeftest(m7)
+
+print(regsum)
+
+```
+
+
+Age
+
+```{r}
+
+m8 <- lm(PSSScore~Group+as.numeric(age), data = combinedPT)
+
+summary(m8)
+
+m8$vcovHC <- vcovHC(m8)
+
+regsum = coeftest(m8)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+
+```
+
+Kitchen Sink type analysis with many covariates indluded
+
+```{r}
+m9 <- lm(PSSScore~Group+Q5*Group+Q3*Group+Q9*Group+as.numeric(age)*Group, data = combinedPT)
+
+summary(m9)
+
+m7$vcovHC <- vcovHC(m9)
+
+regsum = coeftest(m9)
+
+print(regsum)
+```
+
+Stargazer summary table for models in control/placebo experiment group.
+
+```{r,results='asis'}
+stargazer(m1,m2,m9,type="latex",
+          report = "vcs*", #
+          #title = "Linear Models",
+          column.sep.width = "1pt",
+          keep.stat = c("rsq", "n"),          
+          font.size = "tiny"
+          )
+
+```
+
+Control and Placebo experiment group with correspondign models
+
+```{r}
+
+m9 <- lm(PSSScore~Group, data = combinedCP)
+
+summary(m9)
+
+m9$vcovHC <- vcovHC(m9)
+
+regsum = coeftest(m9)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+
+```
+
+Broken Down by Political Affiliation
+
+```{r}
+m10 <- lm(PSSScore~Group+Q5+Q5*Group, data = combinedCP)
+
+m10$vcovHC <- vcovHC(m10)
+
+regsum = coeftest(m10)
+
+print(regsum)
+
+```
+
+Republican
+```{r}
+m11 <- lm(PSSScore~Group, data = republicanCP)
+
+summary(m11)
+
+m11$vcovHC <- vcovHC(m11)
+
+regsum = coeftest(m11)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+```
+
+Democrat
+```{r}
+
+m12 <- lm(PSSScore~Group, data = democratCP)
+
+summary(m12)
+
+m12$vcovHC <- vcovHC(m12)
+
+regsum = coeftest(m12)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+
+```
+
+Independent
+```{r}
+
+m13 <- lm(PSSScore~Group, data = independentCP)
+
+summary(m13)
+
+m13$vcovHC <- vcovHC(m13)
+
+regsum = coeftest(m13)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+
+```
+
+Looking at some other pre-treatment effects
+
+Gender
+
+```{r}
+m14 <- lm(PSSScore~Group+Q3, data = combinedCP)
+
+summary(m14)
+
+m14$vcovHC <- vcovHC(m14)
+
+regsum = coeftest(m14)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+```
+
+Ethnicity
+
+```{r}
+m15 <- lm(PSSScore~Group+ethnicity, data = combinedCP)
+
+summary(m15)
+
+m15$vcovHC <- vcovHC(m15)
+
+regsum = coeftest(m15)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+
+```
+
+Age
+
+```{r}
+
+m16 <- lm(PSSScore~Group+ethnicity, data = combinedCP)
+
+summary(m16)
+
+m16$vcovHC <- vcovHC(m16)
+
+regsum = coeftest(m16)
+
+print(regsum)
+
+confidence_interval = get.confidence(regsum[2,1],regsum[2,2])
+
+print(confidence_interval)
+
+```
+
+"Kitchen Sink"
+
+```{r}
+m17 <- lm(PSSScore~Group+Q5*Group+Q3*Group+Q9*Group+as.numeric(age)*Group, data = combinedCP)
+
+summary(m17)
+
+m17$vcovHC <- vcovHC(m17)
+
+regsum = coeftest(m17)
+
+print(regsum)
+```
+
+Stargazer summary table for models in placebo/treatment experiment group.
+
+```{r,results='asis'}
+stargazer(m9,m10,m17, type="latex",
+          report = "vcs*", #
+          #title = "Linear Models",
+          column.sep.width = "1pt",
+          keep.stat = c("rsq", "n"),          
+          font.size = "tiny"
+          #omit.table.layout = "n" # Omit more output related to errors
+          )
+
+```
+
+This section contains various plots included in the final paper
+
+```{r}
+multiplot <- function(..., plotlist = NULL, file, cols = 1, layout = NULL) {
+  require(grid)
+  plots <- c(list(...), plotlist)
+  numPlots = length(plots)
+  if (is.null(layout)) {
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                 ncol = cols, nrow = ceiling(numPlots/cols))
+}
+
+if (numPlots == 1) {
+print(plots[[1]])
+
+} else {
+grid.newpage()
+pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+for (i in 1:numPlots) {
+  matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+  print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                  layout.pos.col = matchidx$col))
+ }
+}
+ }
+```
+
+Prep Data for Graphs
+
+```{r}
+
+all = alldata
+#Make Data Values for Reports
+
+educ2.lkp.df<-data.frame(response=c("Less than high school degree",
+"High school graduate (high school diploma or equivalent including GED)", 
+"Some college but no degree",
+"Associate degree in college (2-year)", 
+"Bachelor's degree in college (4-year)",
+"Master's degree", 
+"Doctoral degree",
+"Professional degree (JD, MD)"), response.no=c('1. High School',
+              '1. High School',
+              '2. Some College',
+              '2. Some College',
+              '3. College',
+              '4. Post College',
+              '4. Post College',
+              '4. Post College'
+              ))
+
+all$educplot2 <- educ2.lkp.df$response.no[match(all$Q9, educ2.lkp.df$response)]
+
+educ.lkp.df<-data.frame(response=c("Less than high school degree",
+"High school graduate (high school diploma or equivalent including GED)", 
+"Some college but no degree",
+"Associate degree in college (2-year)", 
+"Bachelor's degree in college (4-year)",
+"Master's degree", 
+"Doctoral degree",
+"Professional degree (JD, MD)"), response.no=c('1. High School (141)',
+              '1. High School (141)',
+              '2. Some College (183)',
+              '2. Some College (183)',
+              '3. College (197)',
+              '4. Post College (130)',
+              '4. Post College (130)',
+              '4. Post College (130)'
+              ))
+
+
+
+all$educplot <- educ.lkp.df$response.no[match(all$Q9, educ.lkp.df$response)]
+
+
+inc.lkp.df<-data.frame(response=c('Less than $10,000',
+    '$10,000 to $19,999','$20,000 to $29,999','$30,000 to $39,999',
+    '$40,000 to $49,999', 
+    '$50,000 to $59,999',
+    '$60,000 to $69,999',
+    '$70,000 to $79,999',
+    '$80,000 to $89,999',
+    '$90,000 to $99,999',
+    '$100,000 to $149,999',
+    "$150,000 or more"), response.no=c( 
+              'Less than $10k',
+              '$10-20K',
+              '$20-30K',
+              '$30-40K',
+              '$40-50K',
+              '$50-60K',
+              '$60-70K',
+              '$70-80K',
+              '$80-90K',
+              '$90-100K',
+              '$100-150K',
+              '$150K or more'
+              ))
+
+
+all$incplot <- inc.lkp.df$response.no[match(all$Q11, inc.lkp.df$response)]
+all$incplot2 <- factor(all$incplot, c('Less than $10k',
+              '$10-20K',
+              '$20-30K',
+              '$30-40K',
+              '$40-50K',
+              '$50-60K',
+              '$60-70K',
+              '$70-80K',
+              '$80-90K',
+              '$90-100K',
+              '$100-150K',
+              '$150K or more'))
+
+	
+
+inc2.lkp.df<-data.frame(response=c('Less than $10,000',
+    '$10,000 to $19,999','$20,000 to $29,999','$30,000 to $39,999',
+    '$40,000 to $49,999', 
+    '$50,000 to $59,999',
+    '$60,000 to $69,999',
+    '$70,000 to $79,999',
+    '$80,000 to $89,999',
+    '$90,000 to $99,999',
+    '$100,000 to $149,999',
+    "$150,000 or more"), response.no=c( 
+              '$0-20K (92)',
+              '$0-20K (92)',
+              '$20-40K (143)',
+              '$20-40K (143)',
+              '$40-60K (103)',
+              '$40-60K (103)',
+              '$60-80K (65)',
+              '$60-80K (65)',
+              '$80-100K (55)',
+              '$80-100K (55)',
+              '$100-150K (81)',
+              '$150K or more (112)'
+              ))
+all$inc2plot <- inc2.lkp.df$response.no[match(all$Q11, inc2.lkp.df$response)]
+
+all$inc2plot2 <- factor(all$inc2plot, c( 
+              '$0-20K (92)',
+              '$20-40K (143)',
+              '$40-60K (103)',
+              '$60-80K (65)',
+              '$80-100K (55)',
+              '$100-150K (81)',
+              '$150K or more (112)'))
+
+
+
+
+
+gender.lkp.df<-data.frame(response=c("Do Not Identify (1)",
+"Female (366)", 
+"Male (281)",
+"Transgender (3)"), response.no=c('Do not identify as female, male, or transgender',
+              'Female',
+              'Male',
+              'Transgender'
+              ))
+
+all$genderplot <- gender.lkp.df$response[match(all$Q3, gender.lkp.df$response.no)]
+
+
+all$genderplot <- factor(all$genderplot, c( 
+             'Male (281)',
+              'Female (366)',
+               'Transgender (3)',
+              'Do Not Identify (1)'
+              ))
+
+
+
+
+all$Q5 <- factor(all$Q5, c( 'Democrat','Republican','Independent','Other'))
+all$Q4 <- factor(all$Q4, c( 'Left leaning','Republican','Central','Right leaning'))
+
+
+all$incplot2 <- factor(all$incplot, c('Less than $10k',
+              '$10-20K',
+              '$20-30K',
+              '$30-40K',
+              '$40-50K',
+              '$50-60K',
+              '$60-70K',
+              '$70-80K',
+              '$80-90K',
+              '$90-100K',
+              '$100-150K',
+              '$150K or more'))
+
+
+party.lkp.df<-data.frame(response=c("Democrat",
+"Republican", 
+"Independent",
+"Other"), response.no=c('Democrat',
+              'Republican',
+              'Other',
+              'Other'
+              ))
+
+#all$Q5
+all$partyplot <- party.lkp.df$response.no[match(all$Q5, party.lkp.df$response)]
+all$partyplot <- factor(all$partyplot, c( 'Democrat','Republican','Other'))
+
+
+
+
+party.lkp.df<-data.frame(response=c("Democrat",
+"Republican", 
+"Independent",
+"Other"), response.no=c('Democrat (281)',
+              'Republican (176)',
+              'Other (194)',
+              'Other (194)'
+              ))
+
+#all$Q5
+all$partyplot2 <- party.lkp.df$response.no[match(all$Q5, party.lkp.df$response)]
+all$partyplot2 <- factor(all$partyplot2, c( 'Democrat (281)','Republican (176)','Other (194)'))
+
+
+
+
+
+
+age.lkp.df<-data.frame(response=c("0-20",
+"21-30", 
+"31-40",
+"41-50",
+"51-60", "Older than 60"), response.no=c('0-20 (28)',
+              '21-30 (141)',
+              '31-40 (137)',
+              '41-50 (134)',
+              '51-60 (87)',
+              '60 Plus (124)'
+              ))
+all$ageplot <- age.lkp.df$response.no[match(all$Q1, age.lkp.df$response)]
+#all$educplot <- factor(all$Q1, c( 'Democrat(281)','Republican(176)','Other(194)'))
+
+
+
+all$PSSScore <-                as.numeric(as.character(all$PSSScore))
+
+
+```
+
+Demo Graphs - figure used in presentation
+```{r}
+pp1<-ggplot(data=all, aes(x=Q5, fill=factor(Group))) +
+    geom_bar( position=position_dodge()) + labs(x="") +theme( axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  + guides(fill=guide_legend(title=NULL))
+
+
+pp2<-ggplot(data=all, aes(x=Q1, fill=factor(Group))) +
+    geom_bar( position=position_dodge()) + labs(x="Age") + theme( axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  + guides(fill=guide_legend(title=NULL))
+
+pp3<-ggplot(data=all, aes(x=educplot2, fill=factor(Group))) +
+    geom_bar( position=position_dodge()) + labs(x="") + theme(axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain")) + guides(fill=guide_legend(title=NULL))
+
+pp4<-ggplot(data=all, aes(x=genderplot, fill=factor(Group))) +
+    geom_bar( position=position_dodge()) + labs(x="") + theme(legend.text =element_text(size=8), axis.text.y = element_text(size=10) ,axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  + guides(fill=guide_legend(title=NULL))
+
+
+
+multiplot(pp1, pp2, pp3, pp4, cols=2)
+
+
+```
+
+
+
+Figure 2.4 - Count of treatment assignemnt groups by political affiliation, education, age, and gender
+
+```{r}
+
+
+pp1<-ggplot(data=all, aes(x=partyplot2, fill=factor(Group)))  +scale_y_continuous(breaks = c(.4, .8, 1), labels = c("40%", "80%", "100%")) +
+    geom_bar( position='fill') + labs(x="", y="") + theme(axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain")) + guides(fill=guide_legend(title=NULL))
+
+pp2<-ggplot(data=all, aes(x=ageplot, fill=factor(Group))) +scale_y_continuous(breaks = c(.4, .8, 1), labels = c("40%", "80%", "100%")) +
+    geom_bar( position='fill') + labs(x="Age", y="") + theme( axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  + guides(fill=guide_legend(title=NULL))
+
+
+
+pp3<-ggplot(data=all, aes(x=educplot, fill=factor(Group)))  +scale_y_continuous(breaks = c(.4, .8, 1), labels = c("40%", "80%", "100%")) +
+    geom_bar( position='fill') + labs(x="", y="") + theme(axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain")) + guides(fill=guide_legend(title=NULL))
+
+pp4<-ggplot(data=all, aes(x=genderplot, fill=factor(Group)))  +scale_y_continuous(breaks = c(.4, .8, 1), labels = c("40%", "80%", "100%")) +
+    geom_bar( position='fill') + labs(x="", y="") + theme(legend.text =element_text(size=8), axis.text.y = element_text(size=10) ,axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  + guides(fill=guide_legend(title=NULL))
+
+
+multiplot(pp1, pp2, cols=2)
+multiplot(pp3, pp4, cols=2)
+
+```
+
+Figure 2.5 - Count of treatment assignment groups by income.
+```{r}
+ggplot(data=all, aes(x=inc2plot2, fill=factor(Group)))  +scale_y_continuous(breaks = c(.4, .8, 1), labels = c("40%", "80%", "100%")) +
+    geom_bar( position='fill') + labs(x="", y="") + theme(legend.text =element_text(size=8), axis.text.y = element_text(size=10) ,axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  + guides(fill=guide_legend(title=NULL))
+
+
+```
+
+
+
+Figure 2.6 -  Count of gender by party, political leaning by party, age by party, and political leaning by age.
+
+```{r}
+cp1<-ggplot(data=all, aes(x=partyplot, fill=factor(genderplot))) +
+    geom_bar( position=position_stack()) +  labs(x="Gender by Party")  + guides(fill=guide_legend(title=NULL))+ theme( axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  
+
+cp2<-ggplot(data=all, aes(x=partyplot, fill=factor(Q1))) +
+    geom_bar( position=position_stack()) +  labs(x="Age by Party")  + guides(fill=guide_legend(title=NULL))+ theme( axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain")) 
+
+cp3<-ggplot(data=all, aes(x=partyplot, fill=factor(Q4))) +
+    geom_bar( position=position_stack()) + labs(x="Political Leaning by Party") + guides(fill=guide_legend(title=NULL))+ theme( axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  
+
+
+cp4<-ggplot(data=all, aes(x=Q4, fill=factor(Q1))) +
+    geom_bar( position=position_stack()) + labs(x="Political Leaning by Age ") + guides(fill=guide_legend(title=NULL))+ theme( axis.text.x = element_text(colour="grey20",size=10,angle=90,hjust=.5,vjust=.5,face="plain"))  
+
+
+multiplot(cp1, cp2,cp3, cp4,cols=2)
+
+```
+
+
+
+
+
+Figure 3.2 - PSS Score for respondents in each of the three political affiliations
+```{r}
+p2 <- ggplot(data=all, aes(x=partyplot, y=PSSScore)) + 
+  geom_violin(trim=FALSE)
+p2 + stat_summary(fun.data="mean_sdl", mult=1, 
+                 geom="pointrange", color="red") +  theme(axis.title.x=element_blank())
+```
+
+Figure 3.1 - PSS Score for the three treatment groups
+```{r}
+p2 <- ggplot(data=all, aes(x=Group, y=PSSScore)) + 
+  geom_violin(trim=FALSE)
+p2 + stat_summary(fun.data="mean_sdl", mult=1, 
+                 geom="pointrange", color="red")
+```
+
+anova of age
+```{r}
+
+#mod =lm(PSSScore~Group, data = alldata)
+age1 = lm(PSSScore~Group + Q1 , data = alldata)
+age2 = lm(PSSScore~Group + Q1+ Q1*Group, data = alldata)
+
+stargazer(age1, age2, type = "text")
+anova(age1, age2, test = "F")
+
+
+
+
+```
+
+
+Figure 3.3 - Treatment Effect for the two groups.
+
+```{r}
+c= c(placebo.ate, treatment.ate)
+ci.low  = c(     placebo.ate - placebogroup.se,           treatment.ate - treatmentgroup.se)
+ci.high = c(     placebo.ate + placebogroup.se,           treatment.ate+ treatmentgroup.se)
+
+p_df = cbind(c, ci.low, ci.high)
+p_df = data.frame(p_df)
+names(p_df) <- c("c", "low", "high")
+
+print(p_df)
+## figure 1
+par(mar = c(5,7,4,2) + 0.1)
+plot(x=1:2, y=p_df$c, pch = 18, ylim = c(-5,5), xlim = c(0, 3),
+   xlab = "", xaxt = 'n',
+   cex = 2,
+   axes = FALSE, ann = FALSE,
+   main = "PSS Impact from Treatment"
+  )
+for(i in 1:2) {
+arrows(x0 = i, x1 = i, y0 = p_df$low[i], y1 = p_df$high[i], length = 0)
+}
+#for(i in 1:2) {
+#arrows(x0 = i, x1 = i, y0 = p_df$low90[i], y1 = p_df$high90[i], length = 0, lwd = 4)
+#}
+abline(h=0, lty = 3, col = "black")
+axis(2)
+title(ylab = "PSS Reduction", line = 4.5)
+title(main = "PSS Impact from Treatment")
+axis(1, at = 1:2, labels = c( "Placebo", "Treatment"), tick = FALSE, cex.axis = 1)
+
+#dev.off()
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+Figure 3.2.1 Treatment Effect by part (Placebo vs Control)
+```{r}
+#Graph by party for pacebo group
+
+#c(ATE_P,ATE_DP,ATE_RP,ATE_IP,ATE_OP), "Standard_Error_P/C" = c(PASE,PDSE,PRSE,PISE,POSE) , "ATE Treatment/Placebo" = #c#(ATE_T,ATE_DT,ATE_RT,ATE_IT,ATE_OT), "Standard_Error_T/P" = c(TASE,TDSE,TRSE,TISE,TOSE) )
+
+
+
+c= c(ATE_RP , ATE_DP, ATE_IP, ATE_OP, ATE_P)
+ci.low  = c(     ATE_RP - PRSE, ATE_DP - PDSE, ATE_IP - PISE, ATE_OP - POSE ,ATE_P -PASE)
+ci.high = c(     ATE_RP + PRSE, ATE_DP + PDSE, ATE_IP + PISE, ATE_OP + POSE ,ATE_P +PASE)
+
+p_df = cbind(c, ci.low, ci.high)
+p_df = data.frame(p_df)
+names(p_df) <- c("c", "low", "high")
+
+print(p_df)
+## figure 1
+par(mar = c(5,7,4,2) + 0.1)
+plot(x=1:5, y=p_df$c, pch = 18, ylim = c(-5,10), xlim = c(1, 5),
+   xlab = "", xaxt = 'n',
+   cex = 2,
+   axes = FALSE, ann = FALSE,
+   main = "PSS Impact By Party"
+  )
+for(i in 1:5) {
+arrows(x0 = i, x1 = i, y0 = p_df$low[i], y1 = p_df$high[i], length = 0)
+}
+#for(i in 1:2) {
+#arrows(x0 = i, x1 = i, y0 = p_df$low90[i], y1 = p_df$high90[i], length = 0, lwd = 4)
+#}
+abline(h=0, lty = 3, col = "black")
+axis(2)
+title(ylab = "Placebo Treatment Effect on PSS Score", line = 4.5)
+title(main = "Placebo vs Control PSS Impact by Party")
+axis(1, at = 1:5, labels = c( "Republican", "Democrat", "Independent", "Other", "All"), tick = FALSE, cex.axis = 1)
+
+#dev.off()
+
+
+
+```
+
+Figure 3.5 - Treatment vs Placebo Effect By Party
+```{r}
+#Graph by party for treatment group
+
+#c(ATE_P,ATE_DP,ATE_RP,ATE_IP,ATE_OP), "Standard_Error_P/C" = c(PASE,PDSE,PRSE,PISE,POSE) , "ATE Treatment/Placebo" = #c(ATE_T,ATE_DT,ATE_RT,ATE_IT,ATE_OT), "Standard_Error_T/P" = c(TASE,TDSE,TRSE,TISE,TOSE) )
+
+
+
+c= c(ATE_RT , ATE_DT, ATE_IT, ATE_OT, ATE_T)
+ci.low  = c(     ATE_RT - TRSE, ATE_DT - TDSE, ATE_IT - TISE, ATE_OT - TOSE ,ATE_T -TASE)
+ci.high = c(     ATE_RT + TRSE, ATE_DT + TDSE, ATE_IT + TISE, ATE_OT + TOSE ,ATE_T +TASE)
+
+p_df = cbind(c, ci.low, ci.high)
+p_df = data.frame(p_df)
+names(p_df) <- c("c", "low", "high")
+
+print(p_df)
+## figure 1
+par(mar = c(5,7,4,2) + 0.1)
+plot(x=1:5, y=p_df$c, pch = 18, ylim = c(-10,5), xlim = c(1, 5),
+   xlab = "", xaxt = 'n',
+   cex = 2,
+   axes = FALSE, ann = FALSE,
+   main = "PSS Impact By Party"
+  )
+for(i in 1:5) {
+arrows(x0 = i, x1 = i, y0 = p_df$low[i], y1 = p_df$high[i], length = 0)
+}
+#for(i in 1:2) {
+#arrows(x0 = i, x1 = i, y0 = p_df$low90[i], y1 = p_df$high90[i], length = 0, lwd = 4)
+#}
+abline(h=0, lty = 3, col = "black")
+axis(2)
+title(ylab = "Treatment Effect on PSS Score", line = 4.5)
+title(main = "Treatment vs Placebo PSS Impact by Party")
+axis(1, at = 1:5, labels = c( "Republican", "Democrat", "Independent", "Other", "All"), tick = FALSE, cex.axis = 1)
+
+#dev.off()
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
